@@ -1,10 +1,16 @@
+use std::sync::Arc;
+
 use regex::Regex;
 use steamworks::{Client, SteamError, QueryResult, DownloadItemResult};
 use steamworks::{PublishedFileId, QueryResults};
 
-fn on_item_downloaded(result: DownloadItemResult, client: &Client, item: &QueryResult) {
+fn on_item_downloaded(result: DownloadItemResult, client: &Client) {
+    if let Some(e) = result.error {
+        panic!("[steam-workshop-downloader] error downloading item: {}", e);
+    }
 
-    // TODO: extraction of files
+    let info = client.ugc().item_install_info(result.published_file_id).unwrap();
+    println!("[steam-workshop-downloader] downloaded item: {}", info.folder);
 
     std::process::exit(0);
 }
@@ -18,16 +24,13 @@ fn download_item(client: &Client, item: &QueryResult) {
                 app_id: item.consumer_app_id.unwrap(),
                 error: None,
                 published_file_id: item.published_file_id,
-            }, &client, &item);
+            }, client);
         },
         None => {
             let downloaded = ugc.download_item(item.published_file_id, true);
             if !downloaded {
                 panic!("[steam-workshop-downloader] failed to download item {}", item.published_file_id.0);
             }
-
-            // TODO: fix reference lifetimes here
-            client.register_callback(|result: DownloadItemResult| on_item_downloaded(result, &client, &item));
 
             let download_info = ugc.item_download_info(item.published_file_id);
             if let Some((mut bytes_downloaded, mut total_bytes)) = download_info {
@@ -79,10 +82,15 @@ fn main() {
     match Client::init_app(4000) {
         Ok(steam) => {
             let (client, single) = steam;
+            let client = Arc::new(client);
+
+            let download_cb_client_ref = Arc::clone(&client);
+            client.register_callback(move |result: DownloadItemResult| on_item_downloaded(result, download_cb_client_ref.as_ref()));
+
             let ugc = client.ugc();
             ugc.query_item(item_id).unwrap()
                 .include_metadata(true)
-                .fetch(| res | on_item_queried(&client, &res));
+                .fetch(move | res | on_item_queried(&client, &res));
 
             println!("[steam-workshop-downloader] waiting for item to be queried...");
             loop {
